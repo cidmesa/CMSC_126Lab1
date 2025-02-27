@@ -11,25 +11,21 @@ class PhysicalLayer:
         self.socket = None
         self.connected = False
         self.data_link_layer = None
+        self.server_socket = None  # For storing the server listening socket
     
     def connect_to_data_link_layer(self, data_link_layer):
         self.data_link_layer = data_link_layer
     
     def initialize(self):
         if self.is_server:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.socket.bind((self.host, self.port))
-            self.socket.listen(1)
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server_socket.bind((self.host, self.port))
+            self.server_socket.listen(1)
             print(f"Server listening on {self.host}:{self.port}")
             
-            client_socket, addr = self.socket.accept()
-            self.socket = client_socket
-            print(f"Connection from {addr}")
-            self.connected = True
-            
-            # Start receiving thread
-            Thread(target=self.receive_data).start()
+            # Start a thread to accept connections instead of blocking
+            Thread(target=self._accept_connections).start()
         else:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((self.host, self.port))
@@ -39,6 +35,16 @@ class PhysicalLayer:
             # Start receiving thread
             Thread(target=self.receive_data).start()
     
+    def _accept_connections(self):
+        """Accept client connections in a separate thread"""
+        client_socket, addr = self.server_socket.accept()
+        self.socket = client_socket
+        print(f"Connection from {addr}")
+        self.connected = True
+        
+        # Start receiving thread
+        Thread(target=self.receive_data).start()
+    
     def send_data(self, data):
         # Convert data to bitstream (bytes)
         if isinstance(data, str):
@@ -46,10 +52,14 @@ class PhysicalLayer:
         else:
             bit_data = data
             
-        # Send data length first, then data
-        data_len = len(bit_data)
-        self.socket.sendall(struct.pack('!I', data_len))
-        self.socket.sendall(bit_data)
+        # Only send if we're connected
+        if self.connected and self.socket:
+            # Send data length first, then data
+            data_len = len(bit_data)
+            self.socket.sendall(struct.pack('!I', data_len))
+            self.socket.sendall(bit_data)
+        else:
+            print("Cannot send data: not connected")
         
     def receive_data(self):
         while self.connected:
@@ -78,7 +88,9 @@ class PhysicalLayer:
                 break
     
     def close(self):
+        self.connected = False
         if self.socket:
-            self.connected = False
             self.socket.close()
-            print("Physical connection closed")
+        if self.server_socket:
+            self.server_socket.close()
+        print("Physical connection closed")
